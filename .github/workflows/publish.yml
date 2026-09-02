@@ -1,0 +1,81 @@
+name: publish sandbox image
+
+# Builds the Ryvx scan-sandbox image and pushes it to GHCR.
+#
+# This repository exists so that the published image is decoupled from the
+# private Ryvx source repo. A GHCR package inherits the visibility of the
+# repository that pushed it, so publishing from the private repo produced a
+# private package that no CLI user could pull, and making it public there
+# tied image visibility to a private codebase. Owning the Dockerfile here
+# means the package is public because THIS repo is public, and nothing about
+# the private repo's visibility is involved either way.
+#
+# The image contains no Ryvx source. It is debian:bookworm-slim plus
+# publicly available security tooling and the pip packages in
+# requirements-sandbox.txt. Verified: the only COPY in the Dockerfile is
+# that requirements file, and a built image has no ryvx *.py in it and an
+# empty /workspace.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - requirements-sandbox.txt
+      - .github/workflows/publish.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/ryvx-sandbox:latest
+
+      # Verify the PUBLISHED tag rather than trusting the push step's exit
+      # code. Pulls it back fresh and asserts every tool the agent prompts
+      # tell the model to reach for is actually inside. A sandbox that is
+      # missing them is worse than no sandbox: the model is told the tools
+      # exist and silently gets nothing.
+      - name: Verify the published image
+        run: |
+          docker rmi ghcr.io/${{ github.repository_owner }}/ryvx-sandbox:latest || true
+          docker pull ghcr.io/${{ github.repository_owner }}/ryvx-sandbox:latest
+          docker run --rm --entrypoint sh \
+            ghcr.io/${{ github.repository_owner }}/ryvx-sandbox:latest -c '
+              for b in nmap sqlmap nuclei ffuf gobuster nikto dirb httpx whatweb masscan; do
+                command -v $b >/dev/null || { echo "MISSING $b"; exit 1; }
+              done
+              echo "all tools present"
+            '
+
+      # No Ryvx source may ever end up in this image. Asserted, not assumed:
+      # the whole point of this repo is that the image can be public without
+      # exposing a private codebase.
+      - name: Verify no Ryvx source is in the image
+        run: |
+          docker run --rm --entrypoint sh \
+            ghcr.io/${{ github.repository_owner }}/ryvx-sandbox:latest -c '
+              found=$(find / -name "*.py" -path "*ryvx*" 2>/dev/null | head -1)
+              if [ -n "$found" ]; then echo "LEAKED SOURCE: $found"; exit 1; fi
+              echo "no ryvx source present"
+            '
