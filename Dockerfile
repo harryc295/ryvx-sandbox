@@ -51,18 +51,32 @@ RUN pip3 install --no-cache-dir --break-system-packages --require-hashes -r /tmp
 
 # Not packaged in bookworm at all — pinned GitHub release binaries, no Go
 # toolchain needed in the final image.
+#
+# Every archive is SHA-256 verified against the checksum published in its own
+# upstream release before it is unpacked. A pinned version tag on its own does
+# not help if a release asset is re-uploaded under the same tag, or if the
+# download is tampered with in transit, and this layer used to trust whatever
+# bytes curl handed back. That is the same gap --require-hashes already closes
+# for the pip layer above, and that vm_image_fetch.py closes for the
+# RE-sandbox guest image.
+#
+# Sums are taken from each project's own published *_checksums.txt for the
+# pinned tag. Bump them in the same commit as a version bump; the build fails
+# loudly on drift rather than installing an unexpected binary.
 RUN set -eux; \
-    curl -fsSL -o /tmp/nuclei.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.11.0/nuclei_3.11.0_linux_amd64.zip \
-    && unzip -qo /tmp/nuclei.zip -d /usr/local/bin nuclei && rm /tmp/nuclei.zip \
-    && curl -fsSL -o /tmp/subfinder.zip https://github.com/projectdiscovery/subfinder/releases/download/v2.14.0/subfinder_2.14.0_linux_amd64.zip \
-    && unzip -qo /tmp/subfinder.zip -d /usr/local/bin subfinder && rm /tmp/subfinder.zip \
-    && curl -fsSL -o /tmp/httpx.zip https://github.com/projectdiscovery/httpx/releases/download/v1.10.0/httpx_1.10.0_linux_amd64.zip \
-    && unzip -qo /tmp/httpx.zip -d /usr/local/bin httpx && rm /tmp/httpx.zip \
-    && curl -fsSL -o /tmp/gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
-    && tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks && rm /tmp/gitleaks.tar.gz \
-    && curl -fsSL -o /tmp/trufflehog.tar.gz https://github.com/trufflesecurity/trufflehog/releases/download/v3.96.0/trufflehog_3.96.0_linux_amd64.tar.gz \
-    && tar -xzf /tmp/trufflehog.tar.gz -C /usr/local/bin trufflehog && rm /tmp/trufflehog.tar.gz \
-    && chmod +x /usr/local/bin/nuclei /usr/local/bin/subfinder /usr/local/bin/httpx /usr/local/bin/gitleaks /usr/local/bin/trufflehog
+    fetch() { curl -fsSL -o "/tmp/$1" "$2"; echo "$3  /tmp/$1" | sha256sum -c -; }; \
+    fetch nuclei.zip        https://github.com/projectdiscovery/nuclei/releases/download/v3.11.0/nuclei_3.11.0_linux_amd64.zip                   dc238d6040813e14fc30514dac5a2eb1b430c694f3ca99eee2a5097e55076283; \
+    fetch subfinder.zip     https://github.com/projectdiscovery/subfinder/releases/download/v2.14.0/subfinder_2.14.0_linux_amd64.zip             6529294788f56a20ed96a9b70e71f8f3c247f1d6104ba1e2c2e9e58d8a32c6cb; \
+    fetch httpx.zip         https://github.com/projectdiscovery/httpx/releases/download/v1.10.0/httpx_1.10.0_linux_amd64.zip                     63eac4dcd6e5c9867c94765fdaaf66e7b4eeae3474a1f06e600e266a1c81a53e; \
+    fetch gitleaks.tar.gz   https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz                      551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb; \
+    fetch trufflehog.tar.gz https://github.com/trufflesecurity/trufflehog/releases/download/v3.96.0/trufflehog_3.96.0_linux_amd64.tar.gz          7105f1cd6577f058a9e39d0578f1a99c8a1e481e4d3512cd8a09acfe22a0fdc0; \
+    unzip -qo /tmp/nuclei.zip    -d /usr/local/bin nuclei; \
+    unzip -qo /tmp/subfinder.zip -d /usr/local/bin subfinder; \
+    unzip -qo /tmp/httpx.zip     -d /usr/local/bin httpx; \
+    tar -xzf /tmp/gitleaks.tar.gz   -C /usr/local/bin gitleaks; \
+    tar -xzf /tmp/trufflehog.tar.gz -C /usr/local/bin trufflehog; \
+    rm -f /tmp/nuclei.zip /tmp/subfinder.zip /tmp/httpx.zip /tmp/gitleaks.tar.gz /tmp/trufflehog.tar.gz; \
+    chmod +x /usr/local/bin/nuclei /usr/local/bin/subfinder /usr/local/bin/httpx /usr/local/bin/gitleaks /usr/local/bin/trufflehog
 
 # Keep nuclei's template DB current at build time (agents can re-run
 # `nuclei -update-templates` themselves for a fresher set at scan time)
